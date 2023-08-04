@@ -1,16 +1,14 @@
 package core.compiler
 
-import coalmine.AvroTime
 import coalmine.logicalTypes.TimeTrait
+import core.compiler.Extractors.{getAliases, tnFromShapeId}
 import core.schema.Schema
-import core.schema.Schema._
+import core.schema.Schema.{AvroEnum, TypeName,AvroUnion}
 import core.schema.Schema.AvroPrimitive._
-import core.schema.Schema.LogicalType._
 import software.amazon.smithy.model.Model
 import software.amazon.smithy.model.shapes._
-import software.amazon.smithy.model.traits.TimestampFormatTrait
 
-import scala.jdk.CollectionConverters.CollectionHasAsScala
+import scala.jdk.CollectionConverters.{CollectionHasAsScala, MapHasAsScala}
 import scala.jdk.OptionConverters.RichOptional
 
 object CompilerVisitor {
@@ -24,17 +22,15 @@ object CompilerVisitor {
         Some(AvroInt)
       }
 
-      // big decimal is not supported in avro
+      // big decimal is not supported in avro , fixing to double
       override def bigDecimalShape(shape: BigDecimalShape): Option[Schema] = {
-        // todo revisit
         Some(AvroDouble)
       }
 
       override def timestampShape(shape: TimestampShape): Option[Schema] = {
-        // todo process trait to determine which logical type to use
         shape.getTrait(classOf[TimeTrait]).toScala match {
-          case Some(formatTrait) =>
-            formatTrait.getValue match {
+          case Some(timeTrait) =>
+            timeTrait.getTimeType.name() match {
               case "date"                   => Some(AvroInt)
               case "time-millis"            => Some(AvroInt)
               case "time-micros"            => Some(AvroLong)
@@ -46,38 +42,6 @@ object CompilerVisitor {
           case None => Some(AvroLong)
         }
       }
-
-      private def getSchemaForTimeStamp(shape: TimestampShape): Schema = {
-        shape.getTrait(classOf[AvroTime]).toScala match {
-          case Some(formatTrait) =>
-            formatTrait.getValue match {
-              case "date"                   => Date
-              case "time-millis"            => TimeMillis
-              case "time-micros"            => TimeMicros
-              case "timestamp-millis"       => TimestampMillis
-              case "timestamp-micros"       => TimestampMicros
-              case "local-timestamp-millis" => LocalTimestampMillis
-              case "local-timestamp-micros" => LocalTimestampMicros
-            }
-          case None => TimestampMillis
-        }
-      }
-
-      def isAvroService(shape: ServiceShape): Boolean = ???
-
-      // TODO: streaming requests and response types
-      override def serviceShape(shape: ServiceShape): Option[Schema] =
-        // TODO: is this the best place to do the filtering? or should it be done in a preprocessing phase
-        if (isAvroService(shape)) {
-          val operations = shape.getOperations.asScala.toList
-            .map(model.expectShape(_))
-
-          val defs = operations.flatMap(_.accept(this))
-          val rpcs = operations.flatMap(_.accept(rpcVisitor))
-          val service = Service(shape.getId.getName, rpcs)
-
-          List(TopLevelDef.ServiceDef(service)) ++ defs
-        } else Nil
 
       override def booleanShape(shape: BooleanShape): Option[Schema] = {
         Some(AvroBoolean)
@@ -116,49 +80,37 @@ object CompilerVisitor {
         Some(AvroString)
       }
 
+      // AvroEnum is limited to Strings only
       override def enumShape(shape: EnumShape): Option[Schema] = {
-        val reserved: List[Reserved] = getReservedValues(shape)
-        val elements: List[EnumValue] =
-          shape.getAllMembers.asScala.toList.zipWithIndex
-            .map { case ((name, member), edFieldNumber) =>
-              val fieldIndex = findFieldIndex(member).getOrElse(edFieldNumber)
-              EnumValue(name, fieldIndex)
+        val aliases = getAliases(shape)
+        val typeName = tnFromShapeId(shape.getId)
+        val symbols: List[String] =
+          shape.getAllMembers.asScala.toList
+            .map { case (name, _) =>
+              name
             }
-        List(
-          TopLevelDef.EnumDef(
-            Enum(shape.getId.getName, elements, reserved)
-          )
-        )
+        Some(AvroEnum(typeName,symbols, aliases,None))
       }
 
       override def intEnumShape(shape: IntEnumShape): Option[Schema] = {
-        val reserved: List[Reserved] = getReservedValues(shape)
-        val elements = shape.getEnumValues.asScala.toList.map {
-          case (name, value) =>
-            EnumValue(name, value)
-        }
-        List(
-          TopLevelDef.EnumDef(
-            Enum(shape.getId.getName, elements, reserved)
-          )
-        )
-      }
-
-      private def unionShouldBeInlined(shape: UnionShape): Boolean = {
-        shape.hasTrait(classOf[alloy.proto.ProtoInlinedOneOfTrait])
+        val aliases = getAliases(shape)
+        val typeName = tnFromShapeId(shape.getId)
+        val symbols: List[String] =
+          shape.getAllMembers.asScala.toList
+            .map { case (name, _) =>
+              name
+            }
+        Some(AvroEnum(typeName, symbols, aliases, None))
       }
 
       override def unionShape(shape: UnionShape): Option[Schema] = {
-        if (!unionShouldBeInlined(shape)) {
-          val element =
-            MessageElement.OneofElement(processUnion("definition", shape, 1))
-          val name = shape.getId.getName
-          val reserved = getReservedValues(shape)
-          val message = Message(name, List(element), reserved)
-          List(TopLevelDef.MessageDef(message))
-        } else {
-          List.empty
+        shape.getAllMembers.asScala.toList.map { m =>
+          val targetShape = model.getShape(m).get
+          targetShape.accept(this).get
         }
+        )
+
+        Some(AvroUnion())
       }
 
       override def structureShape(shape: StructureShape): Option[Schema] = {
