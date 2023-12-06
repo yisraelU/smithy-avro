@@ -1,87 +1,109 @@
 package core.compiler
 
-import coalmine.logicalTypes.TimeTrait
-import core.compiler.Extractors.{getAliases, tnFromShapeId}
+import coalmine.logicalTypes.AvroTimeTrait
+import coalmine.{AvroDecimalTrait, ScaleTrait}
+import core.compiler.Extractors.{getAliases, getAvroOrder, getDefaultValue, getDocumentation, tnFromShapeId}
 import core.schema.Schema
-import core.schema.Schema.{AvroEnum, TypeName,AvroUnion}
+import core.schema.Schema.{AvroArray, AvroEnum, AvroMap, AvroRecord, AvroUnion, LogicalType, TypeName}
 import core.schema.Schema.AvroPrimitive._
+import core.schema.Schema.AvroRecord.AvroField
+import core.schema.Schema.LogicalType.Decimal
+import core.schema.Schema.LogicalType.Decimal.UnderlyingType
 import software.amazon.smithy.model.Model
 import software.amazon.smithy.model.shapes._
+import software.amazon.smithy.model.traits.{DefaultTrait, DocumentationTrait}
 
 import scala.jdk.CollectionConverters.{CollectionHasAsScala, MapHasAsScala}
 import scala.jdk.OptionConverters.RichOptional
 
 object CompilerVisitor {
 
-  private def compileVisitor(model: Model): ShapeVisitor[Option[Schema]] =
-    new ShapeVisitor.Default[Option[Schema]] {
+  def schemaVisitor(model: Model): ShapeVisitor[Schema] =
+    new ShapeVisitor[Schema] {
 
-      override def getDefault(shape: Shape): Option[Schema] = None
-
-      override def bigIntegerShape(shape: BigIntegerShape): Option[Schema] = {
-        Some(AvroInt)
+      override def bigDecimalShape(shape: BigDecimalShape): Schema = {
+        shape
+          .getTrait(classOf[AvroDecimalTrait])
+          .toScala
+          .map { decimalTrait =>
+            LogicalType.Decimal(
+              decimalTrait.getPrecision,
+              decimalTrait.getScale,
+              UnderlyingType.fromName(decimalTrait.getUnderlyingType.name())
+            )
+          }
+          .getOrElse(AvroDouble)
       }
 
-      // big decimal is not supported in avro , fixing to double
-      override def bigDecimalShape(shape: BigDecimalShape): Option[Schema] = {
-        Some(AvroDouble)
+      override def bigIntegerShape(shape: BigIntegerShape): Schema = {
+        AvroLong
       }
 
-      override def timestampShape(shape: TimestampShape): Option[Schema] = {
-        shape.getTrait(classOf[TimeTrait]).toScala match {
-          case Some(timeTrait) =>
-            timeTrait.getTimeType.name() match {
-              case "date"                   => Some(AvroInt)
-              case "time-millis"            => Some(AvroInt)
-              case "time-micros"            => Some(AvroLong)
-              case "timestamp-millis"       => Some(AvroLong)
-              case "timestamp-micros"       => Some(AvroLong)
-              case "local-timestamp-millis" => Some(AvroLong)
-              case "local-timestamp-micros" => Some(AvroLong)
+      override def timestampShape(shape: TimestampShape): Schema = {
+        shape
+          .getTrait(classOf[AvroTimeTrait])
+          .toScala
+          .map { timeTrait =>
+            {
+              timeTrait.getTimeType.name() match {
+                case "date"             => LogicalType.Date
+                case "time-millis"      => LogicalType.TimeMillis
+                case "time-micros"      => LogicalType.TimeMicros
+                case "timestamp-millis" => LogicalType.TimestampMillis
+                case "timestamp-micros" => LogicalType.TimestampMicros
+                case "local-timestamp-millis" =>
+                  LogicalType.LocalTimestampMillis
+                case "local-timestamp-micros" =>
+                  LogicalType.LocalTimestampMicros
+              }
             }
-          case None => Some(AvroLong)
-        }
+          }
+          .getOrElse(AvroLong)
       }
 
-      override def booleanShape(shape: BooleanShape): Option[Schema] = {
-        Some(AvroBoolean)
+      override def booleanShape(shape: BooleanShape): Schema = {
+        AvroBoolean
       }
 
-      override def blobShape(shape: BlobShape): Option[Schema] = {
-        Some(AvroBytes)
+      override def blobShape(shape: BlobShape): Schema = {
+        AvroBytes
       }
 
-      override def integerShape(shape: IntegerShape): Option[Schema] = {
-        Some(AvroInt)
+      override def integerShape(shape: IntegerShape): Schema = {
+        AvroInt
       }
 
-      override def longShape(shape: LongShape): Option[Schema] = {
-        Some(AvroLong)
+      override def longShape(shape: LongShape): Schema = {
+        AvroLong
       }
 
-      override def doubleShape(shape: DoubleShape): Option[Schema] = {
-        Some(AvroDouble)
+      override def doubleShape(shape: DoubleShape): Schema = {
+        AvroDouble
       }
 
       // 16 bit not supported by avro
-      override def shortShape(shape: ShortShape): Option[Schema] = {
-        Some(AvroInt)
+      override def shortShape(shape: ShortShape): Schema = {
+        AvroInt
       }
 
-      override def floatShape(shape: FloatShape): Option[Schema] = {
-        Some(AvroFloat)
+      override def byteShape(shape: ByteShape): Schema = {
+        AvroInt
       }
 
-      override def documentShape(shape: DocumentShape): Option[Schema] = {
-        ???
+      override def floatShape(shape: FloatShape): Schema = {
+        AvroFloat
       }
 
-      override def stringShape(shape: StringShape): Option[Schema] = {
-        Some(AvroString)
+      override def documentShape(shape: DocumentShape): Schema = {
+        AvroString
+      }
+
+      override def stringShape(shape: StringShape): Schema = {
+        AvroString
       }
 
       // AvroEnum is limited to Strings only
-      override def enumShape(shape: EnumShape): Option[Schema] = {
+      override def enumShape(shape: EnumShape): Schema = {
         val aliases = getAliases(shape)
         val typeName = tnFromShapeId(shape.getId)
         val symbols: List[String] =
@@ -89,10 +111,10 @@ object CompilerVisitor {
             .map { case (name, _) =>
               name
             }
-        Some(AvroEnum(typeName,symbols, aliases,None))
+        AvroEnum(typeName, symbols, aliases, None)
       }
 
-      override def intEnumShape(shape: IntEnumShape): Option[Schema] = {
+      override def intEnumShape(shape: IntEnumShape): Schema = {
         val aliases = getAliases(shape)
         val typeName = tnFromShapeId(shape.getId)
         val symbols: List[String] =
@@ -100,92 +122,72 @@ object CompilerVisitor {
             .map { case (name, _) =>
               name
             }
-        Some(AvroEnum(typeName, symbols, aliases, None))
+        AvroEnum(typeName, symbols, aliases, None)
       }
 
-      override def unionShape(shape: UnionShape): Option[Schema] = {
-        shape.getAllMembers.asScala.toList.map { m =>
-          val targetShape = model.getShape(m).get
-          targetShape.accept(this).get
+      override def unionShape(shape: UnionShape): Schema = {
+        // todo default value
+        //  val defaultValue = shape.getTrait(classOf[DefaultTrait]).toScala.map(_.toNode)
+
+        val schemas: List[Schema] = shape.getAllMembers.asScala.toList.map {
+          case (_, member) =>
+            val targetShape = model.getShape(member.getId).get
+            targetShape.accept(this)
         }
-        )
 
-        Some(AvroUnion())
+        AvroUnion(schemas)
       }
 
-      override def structureShape(shape: StructureShape): Option[Schema] = {
-        val name = shape.getId.getName
-        val messageElements =
-          shape.members.asScala.toList
-            // using foldLeft to accumulate the field count when we fork to
-            // process a union
-            .foldLeft((List.empty[MessageElement], 0)) {
-              case ((fields, fieldCount), m) =>
-                val fieldName = m.getMemberName
-                val fieldIndex = findFieldIndex(m).getOrElse(fieldCount + 1)
-                // We assume the model is well-formed so the result should be non-null
-                val targetShape = model.getShape(m.getTarget).get
-                targetShape
-                  .asUnionShape()
-                  .toScala
-                  .filter(unionShape => unionShouldBeInlined(unionShape))
-                  .map { union =>
-                    val field = MessageElement.OneofElement(
-                      processUnion(fieldName, union, fieldIndex)
-                    )
-                    (fields :+ field, fieldCount + field.oneof.fields.size)
-                  }
-                  .getOrElse {
-                    val isDeprecated = m.hasTrait(classOf[DeprecatedTrait])
-                    val isBoxed = isRequired(m) || isRequired(targetShape)
-                    val numType = extractNumType(m)
-                    val fieldType =
-                      targetShape
-                        .accept(typeVisitor(model, isBoxed, numType))
-                        .get
-                    val field = MessageElement.FieldElement(
-                      Field(
-                        deprecated = isDeprecated,
-                        fieldType,
-                        fieldName,
-                        fieldIndex
-                      )
-                    )
-                    (fields :+ field, fieldCount + 1)
-                  }
-            }
-            ._1
-
-        val reserved = getReservedValues(shape)
-        val message = Message(name, messageElements, reserved)
-        List(TopLevelDef.MessageDef(message))
-      }
-
-      private def processUnion(
-          name: String,
-          shape: UnionShape,
-          indexStart: Int
-      ): Oneof = {
-        val fields = shape.members.asScala.toList.zipWithIndex.map {
-          case (m, fn) =>
-            val fieldName = m.getMemberName
-            val fieldIndex = findFieldIndex(m).getOrElse(indexStart + fn)
-            // We assume the model is well-formed so the result should be non-null
-            val targetShape = model.getShape(m.getTarget).get
-            val numType = extractNumType(m)
+      override def structureShape(shape: StructureShape): Schema = {
+        val TypeName = tnFromShapeId(shape.getId)
+        val aliases = getAliases(shape)
+        val doc = getDocumentation(shape)
+        val fields =
+          shape.members.asScala.toList.map { memberShape: MemberShape =>
+            val fieldName = memberShape.getMemberName
             val fieldType =
-              targetShape
-                .accept(typeVisitor(model, isRequired = true, numType))
-                .get
-            val isDeprecated = m.hasTrait(classOf[DeprecatedTrait])
-            Field(
-              deprecated = isDeprecated,
-              fieldType,
+              model.getShape(memberShape.getTarget).get.accept(this)
+            val aliases = getAliases(memberShape)
+            val doc = getDocumentation(memberShape)
+            val default = getDefaultValue(memberShape)
+            val order = getAvroOrder(memberShape)
+            AvroField(
               fieldName,
-              fieldIndex
+              fieldType,
+              aliases,
+              doc,
+              default,
+              order
             )
-        }
-        Oneof(name, fields)
+          }
+        AvroRecord(TypeName, fields, aliases, doc)
       }
+
+      override def listShape(shape: ListShape): Schema = {
+        val TypeName = tnFromShapeId(shape.getId)
+        val aliases = getAliases(shape)
+        val doc = getDocumentation(shape)
+        val default = getDefaultValue(shape)
+        val elementType = model.getShape(shape.getMember.getTarget).get.accept(
+          this
+        )
+        AvroArray(elementType,default)
+      }
+
+      override def mapShape(shape: MapShape): Schema = {
+        val default = getDefaultValue(shape)
+        val valueType = model.getShape(shape.getValue.getTarget).get.accept(
+          this
+        )
+        AvroMap(valueType, default)
+      }
+
+      override def operationShape(shape: OperationShape): Schema = ???
+
+      override def resourceShape(shape: ResourceShape): Schema = ???
+
+      override def serviceShape(shape: ServiceShape): Schema = ???
+
+      override def memberShape(shape: MemberShape): Schema = ???
     }
 }

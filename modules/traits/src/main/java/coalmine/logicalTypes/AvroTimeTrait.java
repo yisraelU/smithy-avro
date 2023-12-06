@@ -6,11 +6,11 @@ import software.amazon.smithy.model.shapes.ShapeId;
 import software.amazon.smithy.model.traits.AbstractTrait;
 import software.amazon.smithy.model.traits.Trait;
 
-public class TimeTrait extends AbstractTrait {
+public class AvroTimeTrait extends AbstractTrait {
 
     public static final ShapeId ID = ShapeId.from("coalmine#avroTime");
 
-    enum TimeType {
+    public enum TimeType {
         DATE,
         TIME_MILLIS,
         TIME_MICROS,
@@ -22,7 +22,7 @@ public class TimeTrait extends AbstractTrait {
 
     private TimeType timeType;
 
-    public TimeTrait(TimeType timeType, FromSourceLocation sourceLocation) {
+    public AvroTimeTrait(TimeType timeType, FromSourceLocation sourceLocation) {
         super(ID, sourceLocation);
         this.timeType = timeType;
     }
@@ -35,7 +35,7 @@ public class TimeTrait extends AbstractTrait {
         this.timeType = timeType;
     }
 
-    public TimeTrait(ShapeId id, FromSourceLocation sourceLocation) {
+    public AvroTimeTrait(ShapeId id, FromSourceLocation sourceLocation) {
         super(id, sourceLocation);
     }
 
